@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PrintFlow Shop</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- Login view -->
+    <div id="login" class="login hidden">
+      <div class="login-card">
+        <div class="brand"><span class="logo">P</span> PrintFlow <span class="muted">Shop</span></div>
+        <h1>Sign in</h1>
+        <p class="muted">Use your shop owner account.</p>
+        <label>Server URL</label>
+        <input id="baseUrl" type="text" value="http://localhost:3000" />
+        <label>Email</label>
+        <input id="email" type="email" placeholder="owner@shop.com" />
+        <label>Password</label>
+        <input id="password" type="password" />
+        <p id="loginError" class="error"></p>
+        <button id="loginBtn" class="btn btn-primary block">Sign in</button>
+      </div>
+    </div>
+
+    <!-- Main app -->
+    <div id="app" class="app hidden">
+      <header class="topbar">
+        <div class="brand"><span class="logo">P</span> PrintFlow <span class="muted">Shop</span></div>
+        <div class="topbar-right">
+          <div class="printer-box">
+            <span id="printerStatus" class="dot"></span>
+            <select id="printerSelect" class="select"></select>
+            <button id="testBtn" class="btn btn-outline btn-sm">Test page</button>
+          </div>
+          <span id="shopName" class="muted"></span>
+          <button id="logoutBtn" class="btn btn-ghost btn-sm">Sign out</button>
+        </div>
+      </header>
+
+      <nav class="tabs" id="tabs"></nav>
+
+      <main class="board" id="board"></main>
+      <div id="toast" class="toast hidden"></div>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
