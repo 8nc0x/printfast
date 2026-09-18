@@ -1,81 +1,102 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { auth } from '@/auth';
-import { supabaseAdmin } from '@/lib/supabase/admin';
+import { db } from '@/lib/db';
 import type { PrintJobRow } from '@/lib/db.types';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { duplicateJob } from '../actions';
 
 export const metadata = { title: 'Order' };
 
-async function getJob(id: string, studentId: string): Promise<PrintJobRow | null> {
-  try {
-    const { data } = await supabaseAdmin()
-      .from('print_jobs')
-      .select('*')
-      .eq('id', id)
-      .eq('student_id', studentId)
-      .maybeSingle();
-    return (data as PrintJobRow) ?? null;
-  } catch {
-    return null;
-  }
-}
-
 export default async function JobDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = await auth();
-  const job = await getJob(id, session!.user.id);
+  const job = await db().printJob.findFirst({
+    where: { id, studentId: session!.user.id },
+  });
   if (!job) notFound();
 
+  const row = {
+    ...job,
+    price_amount: job.priceAmount != null ? Number(job.priceAmount) : null,
+    created_at: job.createdAt.toISOString(),
+    updated_at: job.updatedAt.toISOString(),
+  } as unknown as PrintJobRow;
+
   const rows: [string, string][] = [
-    ['Pages', `${job.total_pages} (${job.color_pages} color · ${job.bw_pages} B&W)`],
-    ['Copies', String(job.copies)],
-    ['Paper', job.paper_size],
-    ['Orientation', job.orientation],
-    ['Binding', job.binding],
-    ['Amount', job.price_amount != null ? formatCurrency(Number(job.price_amount)) : '—'],
-    ['Created', formatDateTime(job.created_at)],
+    ['Pages', `${row.total_pages} (${row.color_pages} color · ${row.bw_pages} B&W)`],
+    ['Copies', String(row.copies)],
+    ['Paper', row.paper_size],
+    ['Orientation', row.orientation],
+    ['Binding', row.binding],
+    ['Created', formatDateTime(row.created_at)],
   ];
 
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">{job.order_number}</h1>
-          <p className="text-sm text-muted-foreground">Your pickup code</p>
+          <h1 className="text-xl font-semibold tracking-tight">{row.order_number}</h1>
+          <p className="text-sm text-muted-foreground">Order details</p>
         </div>
-        <StatusBadge status={job.status} />
+        <StatusBadge status={row.status} />
       </div>
 
-      {job.status === 'ready_for_pickup' && (
-        <div className="rounded-lg border border-primary bg-primary-weak p-4">
+      {row.status === 'ready_for_pickup' && (
+        <div className="rounded-xl border border-primary bg-primary-weak p-4 text-center">
           <p className="text-sm font-medium text-primary">Ready for pickup</p>
-          <p className="mt-1 text-sm text-primary/80">
-            Show the code <span className="font-semibold">{job.order_number}</span> at the counter.
+          <p className="mt-1 font-mono text-2xl font-semibold tracking-widest text-primary">
+            {row.order_number}
           </p>
+          <p className="mt-1 text-sm text-primary/80">Show this code at the counter.</p>
         </div>
       )}
 
-      <dl className="divide-y divide-border rounded-lg border border-border">
-        {rows.map(([label, value]) => (
-          <div key={label} className="flex items-center justify-between px-4 py-3 text-sm">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className="font-medium capitalize">{value}</dd>
-          </div>
-        ))}
-      </dl>
+      {row.price_amount != null && (
+        <Card>
+          <CardContent className="flex items-center justify-between p-4">
+            <div>
+              <p className="text-sm text-muted-foreground">Total paid / due</p>
+              <p className="text-lg font-semibold">{formatCurrency(row.price_amount)}</p>
+            </div>
+            {row.is_locked && (
+              <p className="max-w-[180px] text-right text-xs text-muted-foreground">
+                Paid &amp; locked — no further edits.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Print configuration</CardTitle>
+          <CardDescription>Settings sent to the shop with this order.</CardDescription>
+        </CardHeader>
+        <CardContent className="p-0 pb-2">
+          <dl className="divide-y divide-border">
+            {rows.map(([label, value]) => (
+              <div key={label} className="flex items-center justify-between px-6 py-2.5 text-sm">
+                <dt className="text-muted-foreground">{label}</dt>
+                <dd className="font-medium capitalize">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </CardContent>
+      </Card>
 
       {/* Draft / configured: edit or pay. */}
-      {!job.is_locked && (job.status === 'draft' || job.status === 'configured') && (
+      {!row.is_locked && (row.status === 'draft' || row.status === 'configured') && (
         <div className="flex gap-2">
-          <Link href={`/jobs/${job.id}/edit`} className="flex-1">
+          <Link href={`/jobs/${row.id}/edit`} className="flex-1">
             <Button variant="outline" className="w-full">Edit pages</Button>
           </Link>
-          {job.status === 'configured' && (
-            <Link href={`/jobs/${job.id}/pay`} className="flex-1">
+          {row.status === 'configured' && (
+            <Link href={`/jobs/${row.id}/pay`} className="flex-1">
               <Button className="w-full">Continue to payment</Button>
             </Link>
           )}
@@ -83,17 +104,15 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
       )}
 
       {/* Past orders: reuse as a template. */}
-      {(job.status === 'completed' || job.status === 'rejected') && (
-        <form action={duplicateJob.bind(null, job.id)}>
-          <Button type="submit" variant="outline" className="w-full">Reorder this job</Button>
+      {(row.status === 'completed' || row.status === 'rejected') && (
+        <form action={duplicateJob.bind(null, row.id)}>
+          <Button type="submit" variant="outline" className="w-full">
+            Reorder this job
+          </Button>
         </form>
       )}
 
-      {job.is_locked && (
-        <p className="text-xs text-muted-foreground">
-          This order is paid and locked. It can no longer be edited or cancelled.
-        </p>
-      )}
+      <Separator className="opacity-0" />
     </div>
   );
 }

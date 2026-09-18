@@ -1,8 +1,9 @@
 import Link from 'next/link';
-import { Plus } from 'lucide-react';
+import { Plus, FileText } from 'lucide-react';
 import { auth } from '@/auth';
 import { getStudentJobs, partitionJobs } from '@/lib/data/jobs';
 import { JobCard } from '@/components/job-card';
+import { EmptyState } from '@/components/empty-state';
 import { Button } from '@/components/ui/button';
 
 export const metadata = { title: 'My jobs' };
@@ -28,9 +29,18 @@ export default async function JobsPage() {
       </div>
 
       {sections.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border p-8 text-center">
-          <p className="text-sm text-muted-foreground">You haven&rsquo;t created any jobs yet.</p>
-        </div>
+        <EmptyState
+          icon={FileText}
+          title="No jobs yet"
+          description="Upload your first document, arrange the pages, and pay from your phone."
+          action={
+            <Link href="/jobs/new">
+              <Button>
+                <Plus className="h-4 w-4" /> New print job
+              </Button>
+            </Link>
+          }
+        />
       ) : (
         sections.map((section) => (
           <section key={section.title} className="space-y-3">

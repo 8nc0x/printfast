@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireShopToken } from '@/lib/shop-token';
-import { supabaseAdmin } from '@/lib/supabase/admin';
+import { db } from '@/lib/db';
 
 /** Record the shop's selected printer + health (from the Electron client). */
 export async function POST(req: Request) {
@@ -17,28 +17,21 @@ export async function POST(req: Request) {
   };
   if (!printerName) return NextResponse.json({ error: 'printerName required' }, { status: 400 });
 
-  const db = supabaseAdmin();
-  // Simple upsert-by-name for this shop.
-  const { data: existing } = await db
-    .from('printer_config')
-    .select('id')
-    .eq('shop_id', payload.shopId)
-    .eq('printer_name', printerName)
-    .maybeSingle();
-
-  if (existing) {
-    await db
-      .from('printer_config')
-      .update({ is_default: !!isDefault, last_status: status ?? 'online' } as never)
-      .eq('id', (existing as { id: string }).id);
-  } else {
-    await db.from('printer_config').insert({
-      shop_id: payload.shopId,
-      printer_name: printerName,
-      is_default: !!isDefault,
-      last_status: status ?? 'online',
-    } as never);
-  }
+  await db().printerConfig.upsert({
+    where: { shopId_printerName: { shopId: payload.shopId, printerName } },
+    create: {
+      shopId: payload.shopId,
+      printerName,
+      isDefault: !!isDefault,
+      lastStatus: status ?? 'online',
+      lastSeenAt: new Date(),
+    },
+    update: {
+      isDefault: !!isDefault,
+      lastStatus: status ?? 'online',
+      lastSeenAt: new Date(),
+    },
+  });
 
   return NextResponse.json({ ok: true });
 }

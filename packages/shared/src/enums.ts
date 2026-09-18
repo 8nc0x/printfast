@@ -3,7 +3,7 @@
  * Keep these in exact sync with the Postgres enums in supabase/migrations.
  */
 
-export const USER_ROLES = ['student', 'shop_owner'] as const;
+export const USER_ROLES = ['student', 'shop_owner', 'admin', 'super_admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 /** Job lifecycle — order matters: dashboard visibility is a threshold on this list. */

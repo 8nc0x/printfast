@@ -5,21 +5,15 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import type { UserRole } from '@printflow/shared';
 import { authConfig } from '@/auth.config';
-import { supabaseAdmin } from '@/lib/supabase/admin';
-import type { UserRow } from '@/lib/db.types';
+import { db } from '@/lib/db';
 
 const credentialsSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
 });
 
-async function getUserByEmail(email: string): Promise<UserRow | null> {
-  const { data } = await supabaseAdmin()
-    .from('users')
-    .select('*')
-    .eq('email', email.toLowerCase())
-    .maybeSingle();
-  return (data as UserRow) ?? null;
+async function getUserByEmail(email: string) {
+  return db().user.findUnique({ where: { email: email.toLowerCase() } });
 }
 
 /**
@@ -42,9 +36,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!parsed.success) return null;
 
         const user = await getUserByEmail(parsed.data.email);
-        if (!user || !user.password_hash) return null;
+        if (!user || !user.passwordHash) return null;
 
-        const ok = await bcrypt.compare(parsed.data.password, user.password_hash);
+        const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
         if (!ok) return null;
 
         return { id: user.id, email: user.email, name: user.name, role: user.role };
@@ -57,12 +51,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (account?.provider === 'google' && user.email) {
         const existing = await getUserByEmail(user.email);
         if (!existing) {
-          await supabaseAdmin().from('users').insert({
-            id: crypto.randomUUID(),
-            email: user.email.toLowerCase(),
-            name: user.name ?? null,
-            image: user.image ?? null,
-            role: 'student',
+          await db().user.create({
+            data: {
+              email: user.email.toLowerCase(),
+              name: user.name ?? null,
+              image: user.image ?? null,
+              role: 'student',
+            },
           });
         }
       }

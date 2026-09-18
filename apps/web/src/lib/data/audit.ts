@@ -1,6 +1,6 @@
 import 'server-only';
 import type { JobStatus } from '@printflow/shared';
-import { supabaseAdmin } from '@/lib/supabase/admin';
+import { db } from '@/lib/db';
 
 /** Append an audit log row. Best-effort — never blocks the primary action. */
 export async function audit(entry: {
@@ -12,14 +12,16 @@ export async function audit(entry: {
   metadata?: Record<string, unknown>;
 }) {
   try {
-    await supabaseAdmin().from('audit_logs').insert({
-      actor_id: entry.actorId ?? null,
-      job_id: entry.jobId ?? null,
-      action: entry.action,
-      from_status: entry.fromStatus,
-      to_status: entry.toStatus,
-      metadata: entry.metadata ?? {},
-    } as never);
+    await db().auditLog.create({
+      data: {
+        actorId: entry.actorId ?? null,
+        jobId: entry.jobId ?? null,
+        action: entry.action,
+        fromStatus: entry.fromStatus ?? null,
+        toStatus: entry.toStatus ?? null,
+        metadata: (entry.metadata ?? {}) as object,
+      },
+    });
   } catch {
     /* swallow — auditing must not break the request */
   }
@@ -34,13 +36,15 @@ export async function notify(entry: {
   payload?: Record<string, unknown>;
 }) {
   try {
-    await supabaseAdmin().from('notifications').insert({
-      user_id: entry.userId,
-      job_id: entry.jobId ?? null,
-      type: entry.type,
-      channel: entry.channel ?? 'push',
-      payload: entry.payload ?? {},
-    } as never);
+    await db().notification.create({
+      data: {
+        userId: entry.userId,
+        jobId: entry.jobId ?? null,
+        type: entry.type,
+        channel: entry.channel ?? 'push',
+        payload: (entry.payload ?? {}) as object,
+      },
+    });
   } catch {
     /* swallow */
   }

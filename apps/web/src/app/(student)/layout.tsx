@@ -3,13 +3,14 @@ import { redirect } from 'next/navigation';
 import { Printer } from 'lucide-react';
 import { auth } from '@/auth';
 import { BottomNav } from '@/components/bottom-nav';
+import { NotificationsBell } from '@/components/notifications-bell';
 import { signOutAction } from '@/app/account-actions';
 import { Button } from '@/components/ui/button';
 
 export default async function StudentLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
   if (!session?.user) redirect('/login');
-  if (session.user.role === 'shop_owner') redirect('/shop/orders');
+  if (session.user.role === 'shop_owner' || session.user.role === 'admin' || session.user.role === 'super_admin') redirect('/shop/orders');
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -21,9 +22,12 @@ export default async function StudentLayout({ children }: { children: React.Reac
             </span>
             PrintFlow
           </Link>
-          <form action={signOutAction}>
-            <Button variant="ghost" size="sm" type="submit">Sign out</Button>
-          </form>
+          <div className="flex items-center gap-1">
+            <NotificationsBell />
+            <form action={signOutAction}>
+              <Button variant="ghost" size="sm" type="submit">Sign out</Button>
+            </form>
+          </div>
         </div>
       </header>
 

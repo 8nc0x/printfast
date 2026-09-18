@@ -3,13 +3,14 @@
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { USER_ROLES } from '@printflow/shared';
-import { supabaseAdmin } from '@/lib/supabase/admin';
+import { db } from '@/lib/db';
 
 const registerSchema = z.object({
   name: z.string().min(1, 'Name is required').max(80),
   email: z.string().email('Enter a valid email'),
   password: z.string().min(8, 'At least 8 characters'),
   role: z.enum(USER_ROLES).default('student'),
+  ref: z.string().max(12).optional(), // referral code captured at signup
 });
 
 export type RegisterState = { error?: string; ok?: boolean };
@@ -29,30 +30,35 @@ export async function registerUser(
     return { error: parsed.error.issues[0]?.message ?? 'Invalid input' };
   }
 
-  const { name, email, password, role } = parsed.data;
-  const db = supabaseAdmin();
+  const { name, email, password, role, ref } = parsed.data;
 
-  const { data: existing } = await db
-    .from('users')
-    .select('id')
-    .eq('email', email.toLowerCase())
-    .maybeSingle();
-
+  const existing = await db().user.findUnique({
+    where: { email: email.toLowerCase() },
+    select: { id: true },
+  });
   if (existing) {
     return { error: 'An account with this email already exists' };
   }
 
-  const password_hash = await bcrypt.hash(password, 10);
+  const passwordHash = await bcrypt.hash(password, 10);
 
-  const { error } = await db.from('users').insert({
-    id: crypto.randomUUID(),
-    email: email.toLowerCase(),
-    name,
-    role,
-    password_hash,
-  });
+  try {
+    const user = await db().user.create({
+      data: {
+        email: email.toLowerCase(),
+        name,
+        role,
+        passwordHash,
+      },
+    });
 
-  if (error) {
+    // Referral capture (first writer wins; best-effort).
+    if (ref) {
+      const { attachReferrer, ensureReferralCode } = await import('@/lib/money/referrals');
+      await attachReferrer(user.id, ref).catch(() => {});
+      await ensureReferralCode(user.id).catch(() => {}); // give the new user their own code
+    }
+  } catch {
     return { error: 'Could not create account. Please try again.' };
   }
 

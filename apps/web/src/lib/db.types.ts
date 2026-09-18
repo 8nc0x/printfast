@@ -68,6 +68,8 @@ export type PrintJobRow = {
   is_locked: boolean;
   created_at: string;
   updated_at: string;
+  /** Present when the query included the student relation (dashboard lists). */
+  student?: { id?: string; name: string | null; email: string | null } | null;
 };
 
 export type JobFileRow = {

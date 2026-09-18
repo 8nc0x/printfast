@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>PrintFlow Shop Agent</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 0; background: #f9fafb; color: #111827; }
+    header { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; }
+    header h1 { font-size: 15px; margin: 0; }
+    main { padding: 20px; max-width: 900px; margin: 0 auto; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .muted { color: #6b7280; font-size: 13px; }
+    button { background: #0f5132; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+    button.ghost { background: #fff; color: #111827; border: 1px solid #e5e7eb; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    input, select { border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+    code { background: #f3f4f6; border-radius: 4px; padding: 2px 6px; }
+    .order { border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px; margin-top: 8px; }
+    .badge { background: #e7f0ec; color: #0f5132; border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .online { background: #16a34a; } .offline { background: #9ca3af; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PrintFlow Shop Agent</h1>
+    <span id="status" class="muted"></span>
+  </header>
+  <main>
+    <div id="pairCard" class="card">
+      <p><strong>Pair with server</strong></p>
+      <p class="muted">Generate a pairing code in the shop dashboard (Printers page), then paste it here.</p>
+      <div class="row" style="margin-top:10px">
+        <input id="baseUrl" placeholder="Server URL" style="flex:1" />
+        <input id="pairingToken" placeholder="Pairing code" style="flex:1" />
+        <button id="pairBtn">Pair</button>
+      </div>
+    </div>
+
+    <div id="mainCard" class="card" style="display:none">
+      <div class="row">
+        <div>
+          <p style="margin:0"><strong>Printer</strong></p>
+          <select id="printerSelect" style="margin-top:6px; min-width: 240px;"></select>
+        </div>
+        <div style="text-align:right">
+          <label class="muted"><input type="checkbox" id="autoPrint" /> Auto-print paid jobs</label>
+          <div style="margin-top:8px">
+            <button class="ghost" id="testBtn">Test page</button>
+            <button class="ghost" id="unpairBtn">Unpair</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="queueCard" class="card" style="display:none">
+      <div class="row">
+        <p style="margin:0"><strong>Paid print queue</strong></p>
+        <button class="ghost" id="refreshBtn">Refresh</button>
+      </div>
+      <div id="orders"></div>
+    </div>
+  </main>
+  <script src="agent-renderer.js"></script>
+</body>
+</html>

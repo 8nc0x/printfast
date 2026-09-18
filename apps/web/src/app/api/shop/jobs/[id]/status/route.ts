@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { JOB_STATUSES, type JobStatus } from '@printflow/shared';
 import { requireShopToken } from '@/lib/shop-token';
 import { transitionJob } from '@/lib/data/shop-actions';
-import { supabaseAdmin } from '@/lib/supabase/admin';
-import type { PrintJobRow } from '@/lib/db.types';
+import { db } from '@/lib/db';
 
 /** Advance a job's status from the Electron client (approve/print/ready/etc.). */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -21,9 +20,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   // Scope to this shop.
-  const { data } = await supabaseAdmin().from('print_jobs').select('shop_id').eq('id', id).maybeSingle();
-  const row = data as Pick<PrintJobRow, 'shop_id'> | null;
-  if (!row || row.shop_id !== payload.shopId) {
+  const row = await db().printJob.findUnique({
+    where: { id },
+    select: { shopId: true },
+  });
+  if (!row || row.shopId !== payload.shopId) {
     return NextResponse.json({ error: 'not found' }, { status: 404 });
   }
 

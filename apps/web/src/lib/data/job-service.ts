@@ -9,16 +9,19 @@ import {
   type PricingConfig,
   DEFAULT_PRICING,
 } from '@printflow/shared';
-import { supabaseAdmin } from '@/lib/supabase/admin';
+import { db } from '@/lib/db';
 import type { PrintJobRow, ShopSettingsRow } from '@/lib/db.types';
+import type { Prisma } from '@printflow/db';
 
 /** Generate an order number not already taken (retries on the rare collision). */
 export async function generateUniqueOrderNumber(): Promise<string> {
-  const db = supabaseAdmin();
   for (let i = 0; i < 8; i++) {
     const candidate = generateOrderNumber();
-    const { data } = await db.from('print_jobs').select('id').eq('order_number', candidate).maybeSingle();
-    if (!data) return candidate;
+    const exists = await db().printJob.findUnique({
+      where: { orderNumber: candidate },
+      select: { id: true },
+    });
+    if (!exists) return candidate;
   }
   // Extremely unlikely fallback.
   return `${generateOrderNumber()}${Date.now().toString(36).slice(-2).toUpperCase()}`;
@@ -26,19 +29,14 @@ export async function generateUniqueOrderNumber(): Promise<string> {
 
 export async function getShopPricing(shopId: string): Promise<PricingConfig> {
   try {
-    const { data } = await supabaseAdmin()
-      .from('shop_settings')
-      .select('*')
-      .eq('shop_id', shopId)
-      .maybeSingle();
-    const s = data as ShopSettingsRow | null;
+    const s = await db().shopSettings.findUnique({ where: { shopId } });
     if (!s) return DEFAULT_PRICING;
     return {
       currency: s.currency,
-      priceBwPage: Number(s.price_bw_page),
-      priceColorPage: Number(s.price_color_page),
-      paperMultiplier: s.paper_multiplier,
-      bindingPrice: s.binding_price,
+      priceBwPage: Number(s.priceBwPage),
+      priceColorPage: Number(s.priceColorPage),
+      paperMultiplier: s.paperMultiplier as PricingConfig['paperMultiplier'],
+      bindingPrice: s.bindingPrice as PricingConfig['bindingPrice'],
     };
   } catch {
     return DEFAULT_PRICING;
@@ -50,42 +48,44 @@ export async function getShopPricing(shopId: string): Promise<PricingConfig> {
  * metrics + settings columns, and rebuilds job_pages. Also recomputes the price
  * snapshot. Returns the new price total.
  */
-export async function persistDocument(job: PrintJobRow, doc: JobDocument): Promise<number> {
+export async function persistDocument(job: Pick<PrintJobRow, 'id' | 'shop_id'>, doc: JobDocument): Promise<number> {
   const parsed = jobDocumentSchema.parse(doc);
-  const db = supabaseAdmin();
   const metrics = computeMetrics(parsed);
   const pricing = await getShopPricing(job.shop_id);
   const price = quote(parsed, pricing).total;
 
-  await db
-    .from('print_jobs')
-    .update({
-      document: parsed,
-      total_pages: metrics.totalPages,
-      color_pages: metrics.colorPages,
-      bw_pages: metrics.bwPages,
-      copies: parsed.settings.copies,
-      paper_size: parsed.settings.paperSize,
-      orientation: parsed.settings.orientation,
-      binding: parsed.settings.binding,
-      price_amount: price,
-      status: parsed.pages.length > 0 ? 'configured' : 'draft',
-    } as never)
-    .eq('id', job.id);
+  await db().$transaction(async (tx) => {
+    await tx.printJob.update({
+      where: { id: job.id },
+      data: {
+        document: parsed as unknown as Prisma.InputJsonValue,
+        totalPages: metrics.totalPages,
+        colorPages: metrics.colorPages,
+        bwPages: metrics.bwPages,
+        copies: parsed.settings.copies,
+        paperSize: parsed.settings.paperSize,
+        orientation: parsed.settings.orientation,
+        binding: parsed.settings.binding,
+        priceAmount: price,
+        status: parsed.pages.length > 0 ? 'configured' : 'draft',
+      },
+    });
 
-  // Rebuild job_pages to mirror the document order.
-  await db.from('job_pages').delete().eq('job_id', job.id);
-  if (parsed.pages.length > 0) {
-    const rows = parsed.pages.map((p, index) => ({
-      job_id: job.id,
-      page_index: index,
-      source_file: p.source.fileId,
-      source_page: p.source.kind === 'pdf_page' ? p.source.pageIndex : null,
-      rotation: p.rotation,
-      color: p.color,
-    }));
-    await db.from('job_pages').insert(rows as never);
-  }
+    // Rebuild job_pages to mirror the document order.
+    await tx.jobPage.deleteMany({ where: { jobId: job.id } });
+    if (parsed.pages.length > 0) {
+      await tx.jobPage.createMany({
+        data: parsed.pages.map((p, index) => ({
+          jobId: job.id,
+          pageIndex: index,
+          sourceFile: p.source.fileId,
+          sourcePage: p.source.kind === 'pdf_page' ? p.source.pageIndex : null,
+          rotation: p.rotation,
+          color: p.color,
+        })),
+      });
+    }
+  });
 
   return price;
 }

@@ -1,6 +1,6 @@
 import 'server-only';
-import { supabaseAdmin } from '@/lib/supabase/admin';
-import { signedUrl } from '@/lib/supabase/storage';
+import { db } from '@/lib/db';
+import { signedUrl } from '@/lib/storage';
 import type { PrintJobRow, JobFileRow } from '@/lib/db.types';
 
 export interface JobSource {
@@ -21,18 +21,25 @@ export async function getJobWithSources(
   jobId: string,
   studentId: string,
 ): Promise<JobWithSources | null> {
-  const db = supabaseAdmin();
-  const { data: jobData } = await db
-    .from('print_jobs')
-    .select('*')
-    .eq('id', jobId)
-    .eq('student_id', studentId)
-    .maybeSingle();
-  const job = jobData as PrintJobRow | null;
+  const job = await db().printJob.findFirst({
+    where: { id: jobId, studentId },
+    include: { files: true, student: true },
+  });
   if (!job) return null;
 
-  const { data: fileData } = await db.from('job_files').select('*').eq('job_id', jobId);
-  const files = (fileData as JobFileRow[]) ?? [];
+  type JobFileLike = (typeof job.files)[number];
+  const files = job.files.map((f: JobFileLike): JobFileRow => ({
+    id: f.id,
+    job_id: f.jobId,
+    kind: f.kind,
+    storage_path: f.storagePath,
+    filename: f.filename,
+    mime_type: f.mimeType,
+    size_bytes: Number(f.sizeBytes),
+    page_count: f.pageCount,
+    sort_order: f.sortOrder,
+    created_at: f.createdAt.toISOString(),
+  }));
 
   const sources: Record<string, JobSource> = {};
   await Promise.all(
@@ -52,5 +59,26 @@ export async function getJobWithSources(
     }),
   );
 
-  return { job, sources };
+  const row: PrintJobRow = {
+    id: job.id,
+    order_number: job.orderNumber,
+    student_id: job.studentId,
+    shop_id: job.shopId,
+    status: job.status,
+    document: job.document as PrintJobRow['document'],
+    total_pages: job.totalPages,
+    color_pages: job.colorPages,
+    bw_pages: job.bwPages,
+    copies: job.copies,
+    paper_size: job.paperSize,
+    orientation: job.orientation,
+    binding: job.binding,
+    price_amount: job.priceAmount != null ? Number(job.priceAmount) : null,
+    final_pdf_path: job.finalPdfPath,
+    is_locked: job.isLocked,
+    created_at: job.createdAt.toISOString(),
+    updated_at: job.updatedAt.toISOString(),
+    student: { name: job.student.name, email: job.student.email },
+  };
+  return { job: row, sources };
 }

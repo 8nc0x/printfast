@@ -1,8 +1,10 @@
 import Link from 'next/link';
-import { Plus, ArrowRight } from 'lucide-react';
+import { Plus, ArrowRight, FileText } from 'lucide-react';
 import { auth } from '@/auth';
 import { getStudentJobs, partitionJobs } from '@/lib/data/jobs';
 import { JobCard } from '@/components/job-card';
+import { EmptyState } from '@/components/empty-state';
+import { LiveRefresh } from '@/components/live-refresh';
 import { Button } from '@/components/ui/button';
 
 export const metadata = { title: 'Home' };
@@ -15,6 +17,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      <LiveRefresh />
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Hi, {firstName}</h1>
         <p className="text-sm text-muted-foreground">What are we printing today?</p>
@@ -62,11 +65,11 @@ export default async function DashboardPage() {
       )}
 
       {jobs.length === 0 && (
-        <div className="rounded-lg border border-dashed border-border p-8 text-center">
-          <p className="text-sm text-muted-foreground">
-            No jobs yet. Start your first print above.
-          </p>
-        </div>
+        <EmptyState
+          icon={FileText}
+          title="No jobs yet"
+          description="Start your first print above — upload, arrange, and pay in under a minute."
+        />
       )}
 
       <div className="flex justify-center pt-2">

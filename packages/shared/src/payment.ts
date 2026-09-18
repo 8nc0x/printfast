@@ -39,4 +39,10 @@ export interface PaymentProvider {
   createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult>;
   /** Verify signature/authenticity of an inbound gateway callback (server-side only). */
   verifyCallback(req: Request): Promise<VerifiedCallback>;
+  /**
+   * Optional authoritative status check (PayXmint check-status). Providers that
+   * support polling implement this; the checkout status proxy uses it. Polling
+   * never fulfills orders on its own — the webhook remains authoritative.
+   */
+  checkStatus?(orderIdExternal: string): Promise<'PENDING' | 'SUCCESS' | 'EXPIRED'>;
 }

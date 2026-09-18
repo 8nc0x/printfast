@@ -1,0 +1,17 @@
+[Unit]
+Description=PrintFlow (PM2)
+After=network.target postgresql.service
+
+[Service]
+Type=forking
+User=www-data
+LimitNOFILE=65536
+Environment=PM2_HOME=/home/www-data/.pm2
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/pm2 resurrect
+ExecReload=/usr/bin/pm2 reload all
+ExecStop=/usr/bin/pm2 kill
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

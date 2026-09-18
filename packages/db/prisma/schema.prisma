@@ -1,0 +1,657 @@
+// PrintFlow/PrintPass — Prisma schema. Source of truth for the database.
+// Phase 0 covered the MVP tables; Phase 2 adds the Order/Catalog ecosystem.
+// Phases 3-4 add ledger, wallets, referrals, subscriptions on top.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── enums ─────────────────────────
+// Keep in exact sync with packages/shared/src/enums.ts.
+
+enum UserRole {
+  student
+  shop_owner
+  admin
+  super_admin
+}
+
+enum JobStatus {
+  draft
+  configured
+  payment_pending
+  paid
+  shop_received
+  approved
+  printing
+  printed
+  ready_for_pickup
+  completed
+  rejected
+}
+
+enum PaymentStatus {
+  pending
+  success
+  failed
+  refunded
+}
+
+enum PaperSize {
+  A4
+  A3
+}
+
+enum Orientation {
+  portrait
+  landscape
+}
+
+enum BindingType {
+  none
+  staple
+  spiral
+}
+
+enum FileKind {
+  pdf
+  image
+}
+
+// ── Phase 2: orders & catalog ──
+
+enum OrderStatus {
+  CREATED
+  AWAITING_PAYMENT
+  PAYMENT_PROCESSING
+  PAID
+  ACCEPTED
+  PREPARING
+  READY
+  OUT_FOR_DELIVERY
+  READY_FOR_PICKUP
+  COMPLETED
+  CANCELLED
+  EXPIRED
+  REFUNDED
+}
+
+enum ItemKind {
+  PRINT
+  PRODUCT
+  SERVICE
+}
+
+enum FulfillmentMode {
+  PICKUP
+  DELIVERY
+}
+
+enum ShopStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  SUSPENDED
+  REJECTED
+}
+
+// ── Phase 3: money ──
+
+enum LedgerEntryType {
+  ORDER_PAYMENT
+  PLATFORM_FEE
+  SHOP_EARNING
+  REFERRAL_REWARD
+  REFERRAL_COMMISSION
+  GATEWAY_FEE
+  REFUND
+  PAYOUT
+  WALLET_CREDIT
+  WALLET_DEBIT
+  SUBSCRIPTION_PAYMENT
+}
+
+enum WalletType {
+  REFERRAL
+  EARNINGS
+  PROMO
+  REFUND
+}
+
+// ── Phase 4: subscriptions ──
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+// ───────────────────────── users & shops ─────────────────────────
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique
+  name         String?
+  role         UserRole   @default(student)
+  passwordHash String?    @map("password_hash")
+  image        String?
+  isBanned     Boolean    @default(false) @map("is_banned")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  ownedShops        Shop[]
+  printJobs         PrintJob[]
+  notifications     Notification[]
+  // Phase 2+3
+  customerOrders    Order[]         @relation("CustomerOrders")
+  wallets           Wallet[]
+  referralsGiven    ReferralEvent[] @relation("ReferralsGiven")
+  referralsReceived ReferralEvent[] @relation("ReferralsReceived")
+  referredById      String?         @map("referred_by_id") @db.Uuid
+  referredBy        User?           @relation("UserReferrals", fields: [referredById], references: [id])
+  referralCode      String?         @unique @map("referral_code")
+  userReferrals     User[]          @relation("UserReferrals")
+
+  @@map("users")
+}
+
+model Shop {
+  id              String     @id @default(uuid()) @db.Uuid
+  name            String
+  address         String?
+  ownerId         String?    @map("owner_id") @db.Uuid
+  owner           User?      @relation(fields: [ownerId], references: [id])
+  isActive        Boolean    @default(true) @map("is_active")
+  // Phase 2: identity + status + location + contact
+  code            String?    @unique
+  slug            String?    @unique
+  category        String?
+  phone           String?
+  whatsapp        String?
+  logoPath        String?    @map("logo_path")
+  coverPath       String?    @map("cover_path")
+  openingHours    Json?      @map("opening_hours")
+  lat             Decimal?   @db.Decimal(10, 8)
+  lng             Decimal?   @db.Decimal(11, 8)
+  status          ShopStatus @default(ACTIVE)
+  acceptingOrders Boolean    @default(true) @map("accepting_orders")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  settings    ShopSettings?
+  printJobs   PrintJob[]
+  printers    PrinterConfig[]
+  catalog     CatalogItem[]
+  orders      Order[]
+  delivery    ShopDelivery?
+  pricing     PricingRule[]
+  subscription Subscription?
+  agents      Agent[]
+
+  @@map("shops")
+}
+
+model ShopSettings {
+  shopId          String   @id @map("shop_id") @db.Uuid
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  priceBwPage     Decimal  @default(2.00) @map("price_bw_page") @db.Decimal(10, 2)
+  priceColorPage  Decimal  @default(10.00) @map("price_color_page") @db.Decimal(10, 2)
+  paperMultiplier Json     @default("{\"A4\":1,\"A3\":2}") @map("paper_multiplier")
+  bindingPrice    Json     @default("{\"none\":0,\"staple\":5,\"spiral\":30}") @map("binding_price")
+  currency        String   @default("INR")
+  acceptingOrders Boolean  @default(true) @map("accepting_orders")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("shop_settings")
+}
+
+// ───────────────────────── print jobs ─────────────────────────
+
+model PrintJob {
+  id           String      @id @default(uuid()) @db.Uuid
+  orderNumber  String      @unique @map("order_number")
+  studentId    String      @map("student_id") @db.Uuid
+  student      User        @relation(fields: [studentId], references: [id])
+  shopId       String      @map("shop_id") @db.Uuid
+  shop         Shop        @relation(fields: [shopId], references: [id])
+  status       JobStatus   @default(draft)
+  document     Json
+  totalPages   Int         @default(0) @map("total_pages")
+  colorPages   Int         @default(0) @map("color_pages")
+  bwPages      Int         @default(0) @map("bw_pages")
+  copies       Int         @default(1)
+  paperSize    PaperSize   @default(A4) @map("paper_size")
+  orientation  Orientation @default(portrait)
+  binding      BindingType @default(none)
+  priceAmount  Decimal?    @map("price_amount") @db.Decimal(10, 2)
+  finalPdfPath String?     @map("final_pdf_path")
+  isLocked     Boolean     @default(false) @map("is_locked")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  files        JobFile[]
+  pages        JobPage[]
+  payments     Payment[]
+  auditLogs    AuditLog[]
+  notifications Notification[]
+  orderItems   OrderItem[]
+  groups       PrintGroup[]
+
+  @@index([studentId, createdAt(sort: Desc)])
+  @@index([shopId, status])
+  @@index([status])
+  @@map("print_jobs")
+}
+
+model JobFile {
+  id          String   @id @default(uuid()) @db.Uuid
+  jobId       String   @map("job_id") @db.Uuid
+  job         PrintJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  kind        FileKind
+  storagePath String   @map("storage_path")
+  filename    String
+  mimeType    String   @map("mime_type")
+  sizeBytes   BigInt   @map("size_bytes")
+  pageCount   Int?     @map("page_count")
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  pages JobPage[]
+
+  @@index([jobId])
+  @@map("job_files")
+}
+
+// ───────────────── Phase 5: print groups & shop agents ─────────────────
+
+model PrintGroup {
+  id        String  @id @default(uuid()) @db.Uuid
+  jobId     String  @map("job_id") @db.Uuid
+  job       PrintJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  pages     Json    // [{ index, rotation }]
+  paperSize String  @map("paper_size")
+  color     String // BW | COLOR
+  sides     String // SINGLE | DUPLEX
+  copies    Int
+  quality   String  @default("normal")
+
+  @@index([jobId])
+  @@map("print_groups")
+}
+
+model Agent {
+  id             String    @id @default(uuid()) @db.Uuid
+  shopId         String    @map("shop_id") @db.Uuid
+  shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  deviceName     String    @map("device_name")
+  pairingToken   String?   @unique @map("pairing_token")
+  pairingExpires DateTime? @map("pairing_expires")
+  agentTokenHash String?   @unique @map("agent_token_hash")
+  version        String?
+  status         String    @default("pending") // pending | active | revoked
+  lastSeenAt     DateTime? @map("last_seen_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  printers PrinterConfig[]
+
+  @@index([shopId, status])
+  @@map("agents")
+}
+
+model JobPage {
+  id            String   @id @default(uuid()) @db.Uuid
+  jobId         String   @map("job_id") @db.Uuid
+  job           PrintJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  pageIndex     Int      @map("page_index")
+  sourceFile    String?  @map("source_file") @db.Uuid
+  sourceFileRef JobFile? @relation(fields: [sourceFile], references: [id], onDelete: Cascade)
+  sourcePage    Int?     @map("source_page")
+  rotation      Int      @default(0)
+  color         String   @default("bw")
+  previewPath   String?  @map("preview_path")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([jobId, pageIndex])
+  @@index([jobId, pageIndex])
+  @@map("job_pages")
+}
+
+// ───────────────────────── payments ─────────────────────────
+
+model Payment {
+  id               String        @id @default(uuid()) @db.Uuid
+  jobId            String?       @map("job_id") @db.Uuid
+  job              PrintJob?     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  // Phase 2: a payment may target an ecosystem Order instead of a legacy print job.
+  ecosystemOrderId String?       @unique @map("ecosystem_order_id") @db.Uuid
+  ecosystemOrder   Order?        @relation(fields: [ecosystemOrderId], references: [id])
+  amount           Decimal       @db.Decimal(10, 2)
+  currency         String        @default("INR")
+  status           PaymentStatus @default(pending)
+  provider         String        @default("custom")
+  paymentReference String?       @map("payment_reference")
+  gatewayReference String?       @map("gateway_reference")
+  rawCallback      Json?         @map("raw_callback")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  @@unique([gatewayReference])
+  @@index([jobId])
+  @@map("payments")
+}
+
+// ───────────────────────── printers ─────────────────────────
+
+model PrinterConfig {
+  id          String   @id @default(uuid()) @db.Uuid
+  shopId      String   @map("shop_id") @db.Uuid
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  agentId     String?  @map("agent_id") @db.Uuid
+  agent       Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  printerName String   @map("printer_name")
+  isDefault   Boolean  @default(false) @map("is_default")
+  lastStatus  String?  @map("last_status")
+  capabilities Json?
+  lastSeenAt  DateTime? @map("last_seen_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([shopId, printerName])
+  @@index([shopId])
+  @@map("printer_config")
+}
+
+// ───────────────────────── notifications & audit ─────────────────────────
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId     String?   @map("job_id") @db.Uuid
+  job       PrintJob? @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type      String
+  channel   String    @default("push")
+  payload   Json?
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String     @id @default(uuid()) @db.Uuid
+  actorId    String?    @map("actor_id") @db.Uuid
+  jobId      String?    @map("job_id") @db.Uuid
+  job        PrintJob?  @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  action     String
+  fromStatus JobStatus? @map("from_status")
+  toStatus   JobStatus? @map("to_status")
+  metadata   Json?
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  @@index([jobId, createdAt])
+  @@map("audit_logs")
+}
+
+// ───────────────── Phase 2: catalog, pricing, orders ─────────────────
+
+model CatalogItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  shopId      String   @map("shop_id") @db.Uuid
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  kind        ItemKind
+  name        String
+  description String?
+  imagePath   String?  @map("image_path")
+  category    String?
+  unit        String   @default("piece") // page | piece | sheet | job
+  price       Decimal  @db.Decimal(10, 2)
+  isVisible   Boolean  @default(true) @map("is_visible")
+  minQty      Int      @default(1) @map("min_qty")
+  maxQty      Int?     @map("max_qty")
+  options     Json?    // variant config: { size: ["A4","A5"], cover: ["soft","hard"] }
+  sortOrder   Int      @default(0) @map("sort_order")
+  // Phase 7: inventory
+  trackStock  Boolean  @default(false) @map("track_stock")
+  stock       Int      @default(0)
+  lowStockThreshold Int? @map("low_stock_threshold")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  orderItems OrderItem[]
+
+  @@index([shopId, kind, isVisible])
+  @@map("catalog_items")
+}
+
+model PricingRule {
+  id       String  @id @default(uuid()) @db.Uuid
+  shopId   String  @map("shop_id") @db.Uuid
+  shop     Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  scope    String // 'print' | 'addon' | 'service' | 'delivery'
+  key      String // e.g. 'A4:BW', 'A4:COLOR', 'spiral', 'lamination'
+  price    Decimal @db.Decimal(10, 2)
+  unit     String  @default("page")
+  isActive Boolean @default(true)
+
+  @@unique([shopId, scope, key])
+  @@map("pricing_rules")
+}
+
+model ShopDelivery {
+  shopId          String   @id @map("shop_id") @db.Uuid
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  enabled         Boolean  @default(false)
+  mode            String   @default("shop_staff") // shop_staff | owner | courier_later
+  radiusKm        Decimal  @default(3) @db.Decimal(5, 2)
+  minOrder        Decimal  @default(0) @map("min_order") @db.Decimal(10, 2)
+  fee             Decimal  @default(0) @db.Decimal(10, 2)
+  freeAbove       Decimal? @map("free_above") @db.Decimal(10, 2)
+  prepMinutes     Int      @default(15) @map("prep_minutes")
+  deliveryMinutes Int      @default(45) @map("delivery_minutes")
+
+  @@map("shop_delivery")
+}
+
+model Order {
+  id              String          @id @default(uuid()) @db.Uuid
+  number          String          @unique // PP-10452 — also the pickup token
+  shopId          String          @map("shop_id") @db.Uuid
+  shop            Shop            @relation(fields: [shopId], references: [id])
+  customerId      String          @map("customer_id") @db.Uuid
+  customer        User            @relation("CustomerOrders", fields: [customerId], references: [id])
+  status          OrderStatus     @default(CREATED)
+  fulfillment     FulfillmentMode @default(PICKUP)
+  deliveryAddress Json?           @map("delivery_address") // {name,phone,address,lat,lng}
+  subtotal        Decimal         @db.Decimal(10, 2)
+  deliveryFee     Decimal         @default(0) @map("delivery_fee") @db.Decimal(10, 2)
+  platformFee     Decimal         @default(0) @map("platform_fee") @db.Decimal(10, 2)
+  total           Decimal         @db.Decimal(10, 2)
+  walletApplied   Decimal         @default(0) @map("wallet_applied") @db.Decimal(10, 2)
+  pricingSnapshot Json            @map("pricing_snapshot") // immutable breakdown + config refs
+  notes           String?
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+  expiresAt       DateTime?       @map("expires_at") // unpaid expiry (cron)
+
+  items   OrderItem[]
+  events  OrderEvent[]
+  payment Payment?
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([shopId, status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id           String       @id @default(uuid()) @db.Uuid
+  orderId      String       @map("order_id") @db.Uuid
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId       String?      @map("item_id") @db.Uuid
+  item         CatalogItem? @relation(fields: [itemId], references: [id])
+  kind         ItemKind
+  nameSnapshot String       @map("name_snapshot")
+  unitPrice    Decimal      @map("unit_price") @db.Decimal(10, 2)
+  qty          Int
+  lineTotal    Decimal      @map("line_total") @db.Decimal(10, 2)
+  options      Json? // chosen variants snapshot
+  printJobId   String?      @unique @map("print_job_id") @db.Uuid
+  printJob     PrintJob?    @relation(fields: [printJobId], references: [id])
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model OrderEvent {
+  id        String       @id @default(uuid()) @db.Uuid
+  orderId   String       @map("order_id") @db.Uuid
+  order     Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  from      OrderStatus?
+  to        OrderStatus
+  actorId   String?      @map("actor_id") @db.Uuid
+  note      String?
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  @@index([orderId, createdAt])
+  @@map("order_events")
+}
+
+// ───────────────── Phase 3: ledger, wallets, referrals ─────────────────
+
+model LedgerEntry {
+  id        String          @id @default(uuid()) @db.Uuid
+  seq       BigInt          @unique @default(autoincrement())
+  type      LedgerEntryType
+  amount    Decimal         @db.Decimal(12, 2)
+  side      Int // +1 credit / -1 debit to `account`
+  account   String // 'platform' | 'shop:{id}' | 'user:{id}' | 'gateway'
+  orderId   String?         @map("order_id") @db.Uuid
+  paymentId String?         @map("payment_id") @db.Uuid
+  refType   String?         @map("ref_type")
+  refId     String?         @map("ref_id") @db.Uuid
+  memo      String?
+  createdAt DateTime        @default(now()) @map("created_at")
+
+  @@index([account, createdAt])
+  @@index([orderId])
+  @@map("ledger_entries")
+}
+
+model Wallet {
+  id      String     @id @default(uuid()) @db.Uuid
+  userId  String     @map("user_id") @db.Uuid
+  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type    WalletType
+  balance Decimal    @default(0) @db.Decimal(12, 2)
+
+  txns WalletTxn[]
+
+  @@unique([userId, type])
+  @@map("wallets")
+}
+
+model WalletTxn {
+  id           String   @id @default(uuid()) @db.Uuid
+  walletId     String   @map("wallet_id") @db.Uuid
+  wallet       Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  amount       Decimal  @db.Decimal(12, 2)
+  side         Int // +1 / -1
+  reason       String
+  refId        String?  @map("ref_id") @db.Uuid
+  balanceAfter Decimal  @map("balance_after") @db.Decimal(12, 2)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([walletId, createdAt])
+  @@map("wallet_txns")
+}
+
+model ReferralEvent {
+  id         String    @id @default(uuid()) @db.Uuid
+  referrerId String    @map("referrer_id") @db.Uuid
+  referrer   User      @relation("ReferralsGiven", fields: [referrerId], references: [id], onDelete: Cascade)
+  referredId String    @unique @map("referred_id") @db.Uuid // one referrer per user, forever
+  referred   User      @relation("ReferralsReceived", fields: [referredId], references: [id])
+  kind       String // 'customer' | 'shop'
+  sourceType String?   @map("source_type") // 'order' | 'subscription'
+  sourceId   String?   @map("source_id") @db.Uuid
+  amount     Decimal   @db.Decimal(10, 2)
+  pct        Decimal?  @db.Decimal(5, 2)
+  creditedAt DateTime? @map("credited_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([referrerId])
+  @@map("referral_events")
+}
+
+model PlatformConfig {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+  updatedBy String?  @map("updated_by") @db.Uuid
+
+  @@map("platform_config")
+}
+
+model Payout {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  amount      Decimal  @db.Decimal(12, 2)
+  status      String   @default("REQUESTED") // REQUESTED | APPROVED | PAID | REJECTED
+  channel     String?
+  destination String?
+  processedBy String?  @map("processed_by") @db.Uuid
+  utr         String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([userId, status])
+  @@map("payouts")
+}
+
+// ───────────────── Phase 4: subscriptions ─────────────────
+
+model SubscriptionPlan {
+  id           String  @id @default(uuid()) @db.Uuid
+  name         String
+  price        Decimal @db.Decimal(10, 2)
+  billingCycle String  @default("monthly") @map("billing_cycle")
+  trialDays    Int     @default(0) @map("trial_days")
+  features     Json    @default("{}") // { staff: 1, printers: 1, inventory: false, ... }
+  isActive     Boolean @default(true) @map("is_active")
+  sortOrder    Int     @default(0) @map("sort_order")
+
+  subscriptions Subscription[]
+
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id                String             @id @default(uuid()) @db.Uuid
+  shopId            String             @unique @map("shop_id") @db.Uuid
+  shop              Shop               @relation(fields: [shopId], references: [id])
+  planId            String             @map("plan_id") @db.Uuid
+  plan              SubscriptionPlan   @relation(fields: [planId], references: [id])
+  status            SubscriptionStatus @default(TRIALING)
+  currentPeriodEnd  DateTime           @map("current_period_end")
+  cancelAtPeriodEnd Boolean            @default(false) @map("cancel_at_period_end")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id             String   @id @default(uuid()) @db.Uuid
+  number         String   @unique
+  subscriptionId String?  @map("subscription_id") @db.Uuid
+  amount         Decimal  @db.Decimal(10, 2)
+  pdfPath        String?  @map("pdf_path")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@map("invoices")
+}

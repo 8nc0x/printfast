@@ -39,6 +39,12 @@ function LoginForm() {
         </div>
         {state.error && <p className="text-sm text-destructive">{state.error}</p>}
         <Button type="submit" className="w-full" disabled={pending}>
+          {pending && (
+            <span
+              aria-hidden
+              className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+            />
+          )}
           {pending ? 'Signing in…' : 'Sign in'}
         </Button>
       </form>

@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireShopToken } from '@/lib/shop-token';
 import { getFinalPdfUrl } from '@/lib/data/shop-actions';
-import { supabaseAdmin } from '@/lib/supabase/admin';
-import type { PrintJobRow } from '@/lib/db.types';
+import { db } from '@/lib/db';
 
 /** Short-lived signed URL to the final PDF, scoped to the shop's own jobs. */
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -15,9 +14,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const { id } = await params;
 
   // Ensure the job belongs to this shop before signing.
-  const { data } = await supabaseAdmin().from('print_jobs').select('shop_id').eq('id', id).maybeSingle();
-  const row = data as Pick<PrintJobRow, 'shop_id'> | null;
-  if (!row || row.shop_id !== payload.shopId) {
+  const row = await db().printJob.findUnique({
+    where: { id },
+    select: { shopId: true },
+  });
+  if (!row || row.shopId !== payload.shopId) {
     return NextResponse.json({ error: 'not found' }, { status: 404 });
   }
 

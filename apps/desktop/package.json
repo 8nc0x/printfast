@@ -1,9 +1,9 @@
 {
   "name": "@printflow/desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "PrintFlow Shop — desktop printing client",
-  "main": "src/main.cjs",
+  "description": "PrintFlow Shop Agent — desktop printing client (pairing + capability-aware printing)",
+  "main": "src/agent-main.cjs",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",

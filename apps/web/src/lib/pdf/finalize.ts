@@ -1,26 +1,23 @@
 import 'server-only';
 import { jobDocumentSchema } from '@printflow/shared';
-import { supabaseAdmin } from '@/lib/supabase/admin';
-import { downloadBytes, uploadBytes, finalPath } from '@/lib/supabase/storage';
+import { db } from '@/lib/db';
+import { downloadBytes, uploadBytes, finalPath } from '@/lib/storage';
 import { generateFinalPdf } from './generate';
-import type { PrintJobRow, JobFileRow } from '@/lib/db.types';
+import type { Prisma } from '@printflow/db';
 
 /**
- * Generate the final print-ready PDF for a job and store it permanently in the
- * `finals` bucket. Sets print_jobs.final_pdf_path. Returns the storage path.
+ * Generate the final print-ready PDF for a job and store it permanently under
+ * the `finals` bucket. Sets print_jobs.final_pdf_path. Returns the storage path.
  * Called after payment succeeds — this PDF is the source of truth the shop prints.
  */
 export async function generateAndStoreFinalPdf(jobId: string): Promise<string> {
-  const db = supabaseAdmin();
-
-  const { data: jobData } = await db.from('print_jobs').select('*').eq('id', jobId).maybeSingle();
-  const job = jobData as PrintJobRow | null;
+  const job = await db().printJob.findUnique({
+    where: { id: jobId },
+    include: { files: { select: { id: true, storagePath: true } } },
+  });
   if (!job) throw new Error('Job not found');
 
-  const { data: fileData } = await db.from('job_files').select('*').eq('job_id', jobId);
-  const files = (fileData as JobFileRow[]) ?? [];
-  const pathByFile = new Map(files.map((f) => [f.id, f.storage_path]));
-
+  const pathByFile = new Map(job.files.map((f) => [f.id, f.storagePath]));
   const doc = jobDocumentSchema.parse(job.document);
 
   const bytes = await generateFinalPdf(doc, async (fileId) => {
@@ -29,9 +26,16 @@ export async function generateAndStoreFinalPdf(jobId: string): Promise<string> {
     return downloadBytes('originals', path);
   });
 
-  const path = finalPath(job.student_id, jobId);
+  const path = finalPath(job.studentId, jobId);
   await uploadBytes('finals', path, bytes, 'application/pdf');
-  await db.from('print_jobs').update({ final_pdf_path: path } as never).eq('id', jobId);
+  await db().printJob.update({ where: { id: jobId }, data: { finalPdfPath: path } });
+
+  // Compile the print groups the Windows agent will execute (Phase 5).
+  const { compileGroups } = await import('./groups');
+  await compileGroups(jobId, doc);
 
   return path;
 }
+
+// Type-only helper re-export to keep the Prisma namespace import intentional.
+export type JobWithFiles = Prisma.PrintJobGetPayload<{ include: { files: true } }>;

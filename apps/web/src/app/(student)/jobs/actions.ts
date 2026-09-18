@@ -9,14 +9,14 @@ import {
   type PageItem,
 } from '@printflow/shared';
 import { auth } from '@/auth';
-import { supabaseAdmin } from '@/lib/supabase/admin';
-import { uploadBytes, originalPath, signedUrl } from '@/lib/supabase/storage';
+import { db } from '@/lib/db';
+import type { Prisma } from '@printflow/db';
+import { uploadBytes, originalPath, signedUrl } from '@/lib/storage';
 import { validateUpload } from '@/lib/upload/validate';
 import { getPdfPageCount } from '@/lib/pdf/inspect';
 import { generateUniqueOrderNumber, persistDocument } from '@/lib/data/job-service';
 import { audit } from '@/lib/data/audit';
 import { DEFAULT_SHOP_ID } from '@/lib/constants';
-import type { PrintJobRow } from '@/lib/db.types';
 
 async function requireStudent() {
   const session = await auth();
@@ -26,16 +26,12 @@ async function requireStudent() {
   return session.user;
 }
 
-async function getEditableJob(jobId: string, studentId: string): Promise<PrintJobRow> {
-  const { data } = await supabaseAdmin()
-    .from('print_jobs')
-    .select('*')
-    .eq('id', jobId)
-    .eq('student_id', studentId)
-    .maybeSingle();
-  const job = data as PrintJobRow | null;
+async function getEditableJob(jobId: string, studentId: string) {
+  const job = await db().printJob.findFirst({
+    where: { id: jobId, studentId },
+  });
   if (!job) throw new Error('Job not found');
-  if (job.is_locked) throw new Error('This order is paid and locked');
+  if (job.isLocked) throw new Error('This order is paid and locked');
   return job;
 }
 
@@ -48,20 +44,18 @@ export async function createJobFromUploads(formData: FormData): Promise<void> {
   const files = formData.getAll('files').filter((f): f is File => f instanceof File && f.size > 0);
   if (files.length === 0) throw new Error('No files provided');
 
-  const db = supabaseAdmin();
   const orderNumber = await generateUniqueOrderNumber();
 
   // 1) Create the draft job shell.
-  const jobId = crypto.randomUUID();
-  const { error: jobErr } = await db.from('print_jobs').insert({
-    id: jobId,
-    order_number: orderNumber,
-    student_id: user.id,
-    shop_id: DEFAULT_SHOP_ID,
-    status: 'draft',
-    document: emptyJobDocument(),
-  } as never);
-  if (jobErr) throw new Error('Could not create job');
+  const job = await db().printJob.create({
+    data: {
+      orderNumber,
+      studentId: user.id,
+      shopId: DEFAULT_SHOP_ID,
+      status: 'draft',
+      document: emptyJobDocument() as unknown as Prisma.InputJsonValue,
+    },
+  });
 
   // 2) Validate + upload each file, collect pages.
   const pages: PageItem[] = [];
@@ -71,32 +65,40 @@ export async function createJobFromUploads(formData: FormData): Promise<void> {
     const verdict = validateUpload(file.type, file.size, buf.subarray(0, 16));
     if (!verdict.ok) throw new Error(`${file.name}: ${verdict.reason}`);
 
-    const fileId = crypto.randomUUID();
-    const path = originalPath(user.id, jobId, fileId, verdict.ext);
+    const fileRow = await db().jobFile.create({
+      data: {
+        jobId: job.id,
+        kind: verdict.kind,
+        storagePath: 'pending',
+        filename: file.name,
+        mimeType: verdict.mime,
+        sizeBytes: file.size,
+        pageCount: 1,
+        sortOrder: i,
+      },
+    });
+
+    const path = originalPath(user.id, job.id, fileRow.id, verdict.ext);
     await uploadBytes('originals', path, buf, verdict.mime);
+    await db().jobFile.update({
+      where: { id: fileRow.id },
+      data: { storagePath: path },
+    });
 
     let pageCount = 1;
     if (verdict.kind === 'pdf') {
       pageCount = await getPdfPageCount(buf).catch(() => 1);
+      await db().jobFile.update({
+        where: { id: fileRow.id },
+        data: { pageCount },
+      });
     }
-
-    await db.from('job_files').insert({
-      id: fileId,
-      job_id: jobId,
-      kind: verdict.kind,
-      storage_path: path,
-      filename: file.name,
-      mime_type: verdict.mime,
-      size_bytes: file.size,
-      page_count: verdict.kind === 'pdf' ? pageCount : 1,
-      sort_order: i,
-    } as never);
 
     if (verdict.kind === 'pdf') {
       for (let p = 0; p < pageCount; p++) {
         pages.push({
           id: crypto.randomUUID(),
-          source: { kind: 'pdf_page', fileId, pageIndex: p },
+          source: { kind: 'pdf_page', fileId: fileRow.id, pageIndex: p },
           rotation: 0,
           color: 'bw',
         });
@@ -104,7 +106,7 @@ export async function createJobFromUploads(formData: FormData): Promise<void> {
     } else {
       pages.push({
         id: crypto.randomUUID(),
-        source: { kind: 'image', fileId },
+        source: { kind: 'image', fileId: fileRow.id },
         rotation: 0,
         color: 'bw',
       });
@@ -113,12 +115,11 @@ export async function createJobFromUploads(formData: FormData): Promise<void> {
 
   // 3) Persist the assembled document (sets metrics, price, status=configured).
   const doc: JobDocument = { ...emptyJobDocument(), pages };
-  const jobRow = { id: jobId, shop_id: DEFAULT_SHOP_ID } as PrintJobRow;
-  await persistDocument(jobRow, doc);
+  await persistDocument({ id: job.id, shop_id: DEFAULT_SHOP_ID }, doc);
 
-  await audit({ actorId: user.id, jobId, action: 'job_created', toStatus: 'configured', metadata: { files: files.length, pages: pages.length } });
+  await audit({ actorId: user.id, jobId: job.id, action: 'job_created', toStatus: 'configured', metadata: { files: files.length, pages: pages.length } });
 
-  redirect(`/jobs/${jobId}/edit`);
+  redirect(`/jobs/${job.id}/edit`);
 }
 
 /**
@@ -139,24 +140,25 @@ export async function addImageToJob(
   if (!verdict.ok) throw new Error(verdict.reason);
   if (verdict.kind !== 'image') throw new Error('Only images can be inserted between pages');
 
-  const fileId = crypto.randomUUID();
-  const path = originalPath(user.id, job.id, fileId, verdict.ext);
-  await uploadBytes('originals', path, buf, verdict.mime);
+  const fileRow = await db().jobFile.create({
+    data: {
+      jobId: job.id,
+      kind: 'image',
+      storagePath: 'pending',
+      filename: file.name,
+      mimeType: verdict.mime,
+      sizeBytes: file.size,
+      pageCount: 1,
+      sortOrder: 999,
+    },
+  });
 
-  await supabaseAdmin().from('job_files').insert({
-    id: fileId,
-    job_id: job.id,
-    kind: 'image',
-    storage_path: path,
-    filename: file.name,
-    mime_type: verdict.mime,
-    size_bytes: file.size,
-    page_count: 1,
-    sort_order: 999,
-  } as never);
+  const path = originalPath(user.id, job.id, fileRow.id, verdict.ext);
+  await uploadBytes('originals', path, buf, verdict.mime);
+  await db().jobFile.update({ where: { id: fileRow.id }, data: { storagePath: path } });
 
   const url = await signedUrl('originals', path);
-  return { fileId, url, filename: file.name };
+  return { fileId: fileRow.id, url, filename: file.name };
 }
 
 /** Save the edited document (reorder/rotate/color/settings). Blocked once locked. */
@@ -164,7 +166,7 @@ export async function saveJobDocument(jobId: string, doc: JobDocument): Promise<
   const user = await requireStudent();
   const job = await getEditableJob(jobId, user.id);
   const parsed = jobDocumentSchema.parse(doc);
-  const price = await persistDocument(job, parsed);
+  const price = await persistDocument({ id: job.id, shop_id: job.shopId }, parsed);
   await audit({ actorId: user.id, jobId, action: 'job_edited', metadata: { pages: parsed.pages.length } });
   revalidatePath(`/jobs/${jobId}`);
   return { price };
@@ -173,73 +175,57 @@ export async function saveJobDocument(jobId: string, doc: JobDocument): Promise<
 /** Duplicate a past job's document into a fresh draft (reorder / template reuse). */
 export async function duplicateJob(jobId: string): Promise<void> {
   const user = await requireStudent();
-  const db = supabaseAdmin();
 
-  const { data } = await db
-    .from('print_jobs')
-    .select('*')
-    .eq('id', jobId)
-    .eq('student_id', user.id)
-    .maybeSingle();
-  const source = data as PrintJobRow | null;
+  const source = await db().printJob.findFirst({
+    where: { id: jobId, studentId: user.id },
+    include: { files: true },
+  });
   if (!source) throw new Error('Job not found');
 
-  const newId = crypto.randomUUID();
   const orderNumber = await generateUniqueOrderNumber();
+
+  const created = await db().printJob.create({
+    data: {
+      orderNumber,
+      studentId: user.id,
+      shopId: source.shopId,
+      status: 'draft',
+      document: emptyJobDocument() as unknown as Prisma.InputJsonValue,
+    },
+  });
 
   // Copy the original file rows with NEW ids (primary keys must be unique). They
   // point at the same immutable storage objects, and we remap the document's page
   // references old id -> new id so everything still resolves.
-  const { data: files } = await db.from('job_files').select('*').eq('job_id', jobId);
   const idMap = new Map<string, string>();
-
-  await db.from('print_jobs').insert({
-    id: newId,
-    order_number: orderNumber,
-    student_id: user.id,
-    shop_id: source.shop_id,
-    status: 'draft',
-    document: emptyJobDocument(),
-  } as never);
-
-  for (const file of (files ?? []) as JobFileLike[]) {
-    const newFileId = crypto.randomUUID();
-    idMap.set(file.id, newFileId);
-    await db.from('job_files').insert({
-      id: newFileId,
-      job_id: newId,
-      kind: file.kind,
-      storage_path: file.storage_path,
-      filename: file.filename,
-      mime_type: file.mime_type,
-      size_bytes: file.size_bytes,
-      page_count: file.page_count,
-      sort_order: file.sort_order,
-    } as never);
+  for (const file of source.files) {
+    const newFile = await db().jobFile.create({
+      data: {
+        jobId: created.id,
+        kind: file.kind,
+        storagePath: file.storagePath,
+        filename: file.filename,
+        mimeType: file.mimeType,
+        sizeBytes: file.sizeBytes,
+        pageCount: file.pageCount,
+        sortOrder: file.sortOrder,
+      },
+    });
+    idMap.set(file.id, newFile.id);
   }
 
+  const sourceDoc = jobDocumentSchema.parse(source.document);
   const remapped: JobDocument = {
-    ...source.document,
-    pages: source.document.pages.map((p) => ({
+    ...sourceDoc,
+    pages: sourceDoc.pages.map((p) => ({
       ...p,
       id: crypto.randomUUID(),
       source: { ...p.source, fileId: idMap.get(p.source.fileId) ?? p.source.fileId },
     })),
   };
 
-  await persistDocument({ id: newId, shop_id: source.shop_id } as PrintJobRow, remapped);
-  await audit({ actorId: user.id, jobId: newId, action: 'job_duplicated', metadata: { from: jobId } });
+  await persistDocument({ id: created.id, shop_id: source.shopId }, remapped);
+  await audit({ actorId: user.id, jobId: created.id, action: 'job_duplicated', metadata: { from: jobId } });
 
-  redirect(`/jobs/${newId}/edit`);
+  redirect(`/jobs/${created.id}/edit`);
 }
-
-type JobFileLike = {
-  id: string;
-  kind: string;
-  storage_path: string;
-  filename: string;
-  mime_type: string;
-  size_bytes: number;
-  page_count: number | null;
-  sort_order: number;
-};

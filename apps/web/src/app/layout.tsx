@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { ServiceWorkerRegister } from '@/components/service-worker-register';
+import { ToastProvider } from '@/components/ui/toast';
 
 export const metadata: Metadata = {
   title: {
@@ -29,7 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        {children}
+        <ToastProvider>{children}</ToastProvider>
         <ServiceWorkerRegister />
       </body>
     </html>
