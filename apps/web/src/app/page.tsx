@@ -61,9 +61,11 @@ export default async function Home() {
   const session = await auth();
   if (session?.user) {
     redirect(
-      ['shop_owner', 'admin', 'super_admin'].includes(session.user.role)
+      session.user.role === 'shop_owner'
         ? '/shop/orders'
-        : '/dashboard',
+        : session.user.role === 'admin' || session.user.role === 'super_admin'
+          ? '/admin'
+          : '/dashboard',
     );
   }
 

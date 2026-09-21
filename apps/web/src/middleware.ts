@@ -34,15 +34,21 @@ export default auth((req) => {
   }
 
   if (isAdminArea && role !== 'admin' && role !== 'super_admin') {
-    return NextResponse.redirect(new URL('/dashboard', nextUrl));
+    return NextResponse.redirect(
+      new URL(role === 'shop_owner' ? '/shop/orders' : '/dashboard', nextUrl),
+    );
   }
 
   if (isShopArea && role !== 'shop_owner') {
-    return NextResponse.redirect(new URL('/dashboard', nextUrl));
+    return NextResponse.redirect(
+      new URL(role === 'admin' || role === 'super_admin' ? '/admin' : '/dashboard', nextUrl),
+    );
   }
 
-  if (isStudentArea && role === 'shop_owner') {
-    return NextResponse.redirect(new URL('/shop/orders', nextUrl));
+  if (isStudentArea && (role === 'shop_owner' || role === 'admin' || role === 'super_admin')) {
+    return NextResponse.redirect(
+      new URL(role === 'shop_owner' ? '/shop/orders' : '/admin', nextUrl),
+    );
   }
 
   return NextResponse.next();

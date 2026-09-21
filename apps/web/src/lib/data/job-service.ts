@@ -13,6 +13,20 @@ import { db } from '@/lib/db';
 import type { PrintJobRow, ShopSettingsRow } from '@/lib/db.types';
 import type { Prisma } from '@printflow/db';
 
+/**
+ * Resolve the shop a new student draft belongs to. MVP: the first active shop.
+ * (The old code hardcoded a fixed UUID that only matches the demo seed's shop id.)
+ */
+export async function resolveDefaultShopId(): Promise<string> {
+  const shop = await db().shop.findFirst({
+    where: { isActive: true },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true },
+  });
+  if (!shop) throw new Error('No active shop configured');
+  return shop.id;
+}
+
 /** Generate an order number not already taken (retries on the rare collision). */
 export async function generateUniqueOrderNumber(): Promise<string> {
   for (let i = 0; i < 8; i++) {

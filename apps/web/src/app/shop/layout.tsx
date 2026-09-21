@@ -19,7 +19,10 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 export default async function ShopLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
   if (!session?.user) redirect('/login');
-  if (session.user.role !== 'shop_owner') redirect('/dashboard');
+  if (session.user.role !== 'shop_owner') {
+    if (session.user.role === 'admin' || session.user.role === 'super_admin') redirect('/admin');
+    redirect('/dashboard');
+  }
 
   const initial = (session.user.email ?? 'S').charAt(0).toUpperCase();
 

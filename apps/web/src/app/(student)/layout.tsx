@@ -10,7 +10,8 @@ import { Button } from '@/components/ui/button';
 export default async function StudentLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
   if (!session?.user) redirect('/login');
-  if (session.user.role === 'shop_owner' || session.user.role === 'admin' || session.user.role === 'super_admin') redirect('/shop/orders');
+  if (session.user.role === 'shop_owner') redirect('/shop/orders');
+  if (session.user.role === 'admin' || session.user.role === 'super_admin') redirect('/admin');
 
   return (
     <div className="flex min-h-dvh flex-col">

@@ -14,9 +14,8 @@ import type { Prisma } from '@printflow/db';
 import { uploadBytes, originalPath, signedUrl } from '@/lib/storage';
 import { validateUpload } from '@/lib/upload/validate';
 import { getPdfPageCount } from '@/lib/pdf/inspect';
-import { generateUniqueOrderNumber, persistDocument } from '@/lib/data/job-service';
+import { generateUniqueOrderNumber, persistDocument, resolveDefaultShopId } from '@/lib/data/job-service';
 import { audit } from '@/lib/data/audit';
-import { DEFAULT_SHOP_ID } from '@/lib/constants';
 
 async function requireStudent() {
   const session = await auth();
@@ -45,13 +44,14 @@ export async function createJobFromUploads(formData: FormData): Promise<void> {
   if (files.length === 0) throw new Error('No files provided');
 
   const orderNumber = await generateUniqueOrderNumber();
+  const shopId = await resolveDefaultShopId();
 
   // 1) Create the draft job shell.
   const job = await db().printJob.create({
     data: {
       orderNumber,
       studentId: user.id,
-      shopId: DEFAULT_SHOP_ID,
+      shopId,
       status: 'draft',
       document: emptyJobDocument() as unknown as Prisma.InputJsonValue,
     },
@@ -115,7 +115,7 @@ export async function createJobFromUploads(formData: FormData): Promise<void> {
 
   // 3) Persist the assembled document (sets metrics, price, status=configured).
   const doc: JobDocument = { ...emptyJobDocument(), pages };
-  await persistDocument({ id: job.id, shop_id: DEFAULT_SHOP_ID }, doc);
+  await persistDocument({ id: job.id, shop_id: shopId }, doc);
 
   await audit({ actorId: user.id, jobId: job.id, action: 'job_created', toStatus: 'configured', metadata: { files: files.length, pages: pages.length } });
 
